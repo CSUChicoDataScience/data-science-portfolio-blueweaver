@@ -1,0 +1,11 @@
+---
+title: "index"
+author: "Brandon Weaver"
+date: "9/29/2020"
+output: html_document
+---
+# Video Game Sales Exploration   
+By Brandon Weaver  
+
+## Table on Contents  
+1. [First Deliverable](deliverable1.html) 
