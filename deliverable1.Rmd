@@ -3,9 +3,11 @@ title: "CSCI 385 - First Deliverable"
 author: "Brandon Weaver"
 date: "9/26/2020"
 output:
-  html_document:
+  pdf_document: 
     fig_width: 10
+  html_document:
     df_print: paged
+    fig_width: 10
 ---
 
 ```{r setup, include=FALSE}
