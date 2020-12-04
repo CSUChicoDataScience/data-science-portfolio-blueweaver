@@ -1,0 +1,173 @@
+---
+title: "CSCI 385 - Second Deliverable"
+author: "Brandon Weaver"
+date: "11/10/2020"
+output:
+   html_document:
+    fig_width: 10
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(rvest)
+library(modelr)
+library(caret)
+library(httr)
+library(jsonlite)
+set.seed(12345)
+```
+
+# Video Games Sales Analysis Part 2
+# Introduction
+
+The overall goal of this deliverable to make a prediction model that can predict the amount of sales that a video game will have based on different factors. Some examples of these factors include average critic score, the genre of the game, or the console that it was released on.
+I would define "success" as being able to predict a game's sales with an error of plus or minus one million which would be a factor of one. This is because the sales figures are in the unit of millions within the data set. 
+"Failure" would be if the average error was significantly greater than 1. 
+Also if the models that are created have p values that are greater than 5% this would suggest that the factors that were chooses have little correlation with the games sales. This is what is referred to as the null-hypothesis. In other words, if the p value of a model is greater than 5% then we accept the null-hypothesis. While this would not be necessarily a failure, it would be disappointing. 
+
+# Expansion of the Data Set
+```{r}
+VGSales <- read_csv("Video_Games_Sales.csv")
+```
+I was able to expand on my original data set by pulling data off of the website rawg.io using their free to use API. To quote their about me paragraph on the website "RAWG is the largest video game database and game discovery service." RAWG collects its data through user input on their website. This is done by having the users log their video game collection.   
+My plan is to use this data to add a new variable to explore and see if it has an impact on game sales, this being the integer `playtime` which is measured in hours. My reasoning is that perhaps if a game has a high play time, then that would correlate with a better word of mouth advertising amongst gamers. This in turn would lead to more sales.  
+Given the time constraint and having to learn how to make an API call in R studios. I have not had a chance to merge the two data sets together to add the `playtime` yet. However, this is one of my plans for improvement in deliverable 3. 
+```{r}
+baseurl <- "https://api.rawg.io/api/games?key=5e133e1135f541f395101593d7cad2b8&page_size=40&dates=1980-01-01,2017-01-01&ordering=metacritic"
+pages <- list()
+for(i in 1:10){
+  mydata <- fromJSON(paste0(baseurl, "&page=", i))
+  pages[[i+1]] <- mydata$results
+}
+RAWGDataFull <- rbind_pages(pages)
+RAWGData <- RAWGDataFull %>%
+  select(name, playtime)
+head(RAWGData)
+```
+  
+# Data Exploration Learned by attempts to expand the Data Set
+While researching how to expand my original data set, I came across some new information about my data that I wanted to document. The first is how VGCharts, the website where the video games sales data originates from, is gathered. The sales figures are based on physical copies sold at retailers. This explains why there are no data points of games there were solely releases on mobile phone platforms.   
+This is important because it does create a new bias in my research. The bias being that it gives a large advantage to games that generally sell better at retail stores rather than through online stores like Steam. This could be used to explain why genres such as Strategy games are so under represented in the data. This is a genre where games tend to be more popular on the PC platform where most of their sales come through digital stores.   
+In comparison genres like Sports games which are predominately only sold on physical copies for home consoles are going to be over represented in this data set.  
+The Other important note is that this digital sales data is incredibly hard to come by and generally from what I have researched not public knowledge.
+
+# Model Version 1
+For all three of the different version of the model that I created, the way that I validated my model was by splitting it up 80/20 where the first 80% of the data was used to train the model and the other 20% were used to test the model. The first model I created was a linear model where I used the `Critic_Score`, `User_Score`, and `Genre` variables in order to predict the global sales of a video game. 
+```{r}
+train_rows <- as.vector(createDataPartition(VGSales$Global_Sales, p = 0.8, list = FALSE))
+
+train <- VGSales[train_rows, ]
+test <- VGSales[-train_rows, ]
+VGmodel <- lm(Global_Sales ~ Critic_Score + User_Score + Genre, data = train)
+
+predictions <- add_predictions(test, VGmodel)
+ggplot(data = predictions, mapping = aes(x = Global_Sales, y = pred)) + 
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red") +
+  labs(x = "Global Sales (million copies sold)", y = "predictions based on model (million copies sold)")
+clean <- predictions %>%
+  filter(!is.na(pred))
+```
+In order to get the R2(), MAE(), or RMSE() functions to work on the data set, I had to remove any predictions that were equal to NA due to there not being any `Critic_Score` values for games that are older than 2002. Perhaps, what I should do in the future is remove those values from the data set before making the model. This is similar to what I had to do for Version 3 of the model as discussed later. 
+
+```{r}
+resids <- add_residuals(test, VGmodel)
+ggplot(data = resids, mapping = aes(x = Critic_Score, y = resid)) + 
+  geom_ref_line(h = 0) + 
+  geom_point() +
+  labs(x = "Average Critic Score (from 1 to 100)", y = "Residuals based on model")
+```
+  
+When looking at the residuals plot, and this is true for all three versions of the model created. There is a common pattern where the model tends to undervalue a majority of the games. My reasoning for this is that because so many of the games have trouble even exceeding 1 million in game sales that it skews the data in a way that it will have a lower prediction.   
+Perhaps for deliverable 3, I will make a model only including games with lower game sales and see if the model will be more accurate predicting the sales of those games. 
+
+```{r}
+R2(clean$pred, clean$Global_Sales)
+MAE(clean$pred, clean$Global_Sales)
+RMSE(clean$pred, clean$Global_Sales)
+summary(VGmodel)
+```
+Based on the summary of the model, there are some positives and negatives. The first positive is that the model has a p-value of about 0. This is important because it suggests that the predictions that were made where not correct based on luck but rather that the model is doing something right. The first negative of the model is that it has an r^2 value of about 6%. This means that there is a high amount of variation with the size of the residuals within the data set.   
+Some other take away from this first model is that it does the best at predicting games in the Sports genre and the Strategy genre. This is interesting because as explained in one of the earlier paragraphs, these where the two genres that I identified as over and under represented. My assumption as to why these were the two most accurate genres is that they may have the most consistency in amount of sales.
+
+# Model version 2
+For the next model that I created, I chose to keep the same three independent variables, `Critic_Score`, `User_Score`, and `Genre`. However, this time I wanted to try to predict sales in North America. My reasoning for the switch was that the best predictor for sales was a games `Critic_Score` value and those scores came from the website Meta Critic.   
+My thinking was that since Meta Critic is an English website then perhaps it would reflect better of the North American market rather than the Global market and therefore be able to make more accurate predictions. 
+```{r}
+train_rows <- as.vector(createDataPartition(VGSales$NA_Sales, p = 0.8, list = FALSE))
+
+train <- VGSales[train_rows, ]
+test <- VGSales[-train_rows, ]
+VGmodel <- lm(NA_Sales ~ Critic_Score + User_Score + Genre, data = train)
+
+predictions <- predict(VGmodel, test)
+predictions <- add_predictions(test, VGmodel)
+
+ggplot(data = predictions, mapping = aes(x = NA_Sales, y = pred)) + 
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red") +
+  labs(x = "North American Sales (million copies sold)", y = "predictions based on model (million copies sold)")
+
+resids <- add_residuals(test, VGmodel)
+
+ggplot(data = resids, mapping = aes(x = Genre, y = resid)) + 
+  geom_ref_line(h = 0) +
+  geom_point() +
+  labs(x = "Genre", y = "Residuals based on model")
+
+clean <- predictions %>%
+  filter(!is.na(pred))
+R2(clean$pred, clean$Global_Sales)
+MAE(clean$pred, clean$Global_Sales)
+RMSE(clean$pred, clean$Global_Sales)
+summary(VGmodel)
+```
+Based on the summary of this model. the R^2 value  and the p-value remain similar to the first version. Also, the the Mean Absolute Error when down from 0.75 million to 0.56, which is an overall great improvement. This leads to the conclusion that my original hypothesis could be correct given the increase in accuracy. 
+
+# Model Version 3
+For the final model that I created, I wanted to go back to trying to predict global sales and I wanted to try to factor in a games `Platform` as another independent variable. One issue that I came across is that `Critic_Score` is only available on games that are new than the year 2002. This would cause issues where when certain Platforms would not have any representation which would cause errors when trying to create the model. The fix was to alter the data set to where only the games that were release in 2003 or later were analyzed. 
+```{r}
+
+newGames <- VGSales %>%
+  filter(Year_of_Release >= 2003)
+
+train_rows <- as.vector(createDataPartition(newGames$Global_Sales, p = 0.8, list = FALSE))
+
+train <- newGames[train_rows, ]
+test <- newGames[-train_rows, ]
+VGmodel <- lm(Global_Sales ~ Critic_Score + User_Score + Genre + Platform , data = train)
+
+predictions <- predict(VGmodel, test)
+predictions <- add_predictions(test, VGmodel)
+
+ggplot(data = predictions, mapping = aes(x = Global_Sales, y = pred)) + 
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red") +
+  labs(x = "Global Sales (million copies sold)", y = "Predictions based on model (million copies sold)")
+
+resids <- add_residuals(test, VGmodel)
+
+ggplot(data = resids, mapping = aes(x = Platform, y = resid)) + 
+  geom_ref_line(h = 0) +
+  geom_point() +
+  labs(x = "Platform (Game Consoles)", y = "Residuals based on model")
+
+clean <- predictions %>%
+  filter(!is.na(pred))
+R2(clean$pred, clean$Global_Sales)
+MAE(clean$pred, clean$Global_Sales)
+RMSE(clean$pred, clean$Global_Sales)
+summary(VGmodel)
+```
+From the summary of this model, the inclusion of the `platform` independent variable lead to a slight improvement in the r^2 value. However, while similar the overall average error was increased from the first and second model. This leads to the possible conclusion that using the `platform` variable ended up not being an important factor when making predictions. 
+
+# Conclusion on Models
+At the start of this deliverable, I defined success as having a model that was able to predict a games sales within an error of 1 million. Based on the Mean Absolute Error on all three of the models ranging from 0.80 to 0.56, I would say that these models are successful at face value. Also, the fact that all of the p-values were close to zero is good sign. However, there are still some issues with the models that need to be address. Those being the fact that the r^2 values all being very low and the common pattern in the residuals of games with high `critic_scores` being predicted lower than their actual sales figures. 
+
+# Social and Ethical Implications
+ For a reminder, in the previous deliverable I discussed the social impact that could be caused by the homogenization of video games due to an accurate predictive model that made it clear what games would sell the best.  
+Another point that I would like to bring up is a factor that I believe to be important with game sales that is hard to quantify which is originality. Normally, the way trends in video games go is that one game does extremely well  and then a large amount of companies try to emulate that experience and cash in on there success.   
+Some examples being Halo:CE leading the way for shooters to become popular on console, which lead to clones that were also successful in their own right such as Call of Duty. Another example being the success of Super Mario Brothers leading to platforming games becoming the most popular genre at the time and lead to the creation of games such as Sonic and Mega Man.   
+The point that I am trying to make is that until someone is able to make a predictive algorithm that was so advanced that it was able to predict popular new game mechanics,design games to the point where a human is not required, and these algorithms are the only way that video games are being developed. Then I would never see this homogenization of video games ever occurring. This is why I would not consider any the models that I am making to be WMDs.
+
