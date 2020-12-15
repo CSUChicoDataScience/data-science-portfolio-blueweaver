@@ -1,0 +1,319 @@
+---
+title: "CSCI 385 - Third Deliverable"
+author: "Brandon Weaver"
+date: "12/7/2020"
+output:
+   html_document:
+    fig_width: 10
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(rvest)
+library(modelr)
+library(caret)
+library(httr)
+library(jsonlite)
+set.seed(12345)
+```
+
+# Video Games Sales Analysis Part 3
+
+# Introduction
+The primary goals of deliverable 3 are to improve upon the work done in deliverables 1 and 2. This will be done by loading in the data from RAWG.io using their API. Then I will join the two data sets so that I now have access to the `playtime` variable. Next I will continue conducting exploratory data analysis to see if the `playtime` variable is worth adding to the model. Finally, the plan is to create three different models. One with all of the data set that now factors in `playtime`, one where only low selling games are included, and lastly a model only including high selling games. 
+
+# Expansion of Data Set
+```{r}
+VGSales <- read_csv("Video_Games_Sales.csv")
+
+baseurl <- "https://api.rawg.io/api/games?key=8fdd449e387c4197ad765b1222eafa73&page_size=40&dates=1980-01-01,2017-01-01"
+pages <- list()
+for(i in 1:100){
+  mydata <- fromJSON(paste0(baseurl, "&page=", i))
+  pages[[i+1]] <- mydata$results
+}
+RAWGData <- rbind_pages(pages)
+```
+  
+The way that the second data set is collected is by calling Rawg.io's API and then using the function rbind_pages to take the results and convert them from JSON data and turn it into a data frame.   
+
+```{r}
+count(RAWGData)
+RAWGDataShowcase <- RAWGData %>%
+  select(-background_image, -ratings, -updated, -tags, -short_screenshots, -parent_platforms, -platforms, -genres)
+head(RAWGDataShowcase)
+```
+  
+The count of the second data set was included to cover a critique of deliverable 2 and to prove that their are 4000 unique games in the second data set. In order to better showcase the second data set several variable have been unselected because they included multiple values which print in an unclear way in R Markdown.   
+
+Some highlight variables that are not used for this deliverable but would be interesting to consider in future analysis is the `stores` variable that shows what stores each game was sold at, perhaps being available at more stores would equate to more sales.   
+
+Also included was an `added` variable that describes how many users of the website own the game. I have chosen not to include this variable in my models because they essentially measure the same thing as the `Global_Sales` variable in the first data set. In my opinion, it does not mean much to predict a variable by basing the predictions on the same variable in the other data set.   
+
+```{r}
+RAWGDataPlaytime <- RAWGData %>%
+  select(name, playtime)
+```
+  
+Since `playtime` is the only variable from the second data set that is going to be used for the model. I made a select statement that only collects the `name` and the `playtime` of each game.    
+
+```{r}
+finalData <- inner_join(VGSales,RAWGDataPlaytime,by=c("Name" = "name"))
+count(finalData)
+```
+  
+This is the code that merges the two files through an inner join. An inner join was made instead of an outer join because including `playtime` would not be much use to the model unless every row had that variable included. Also this does bring up one limitation to the new models. This being that now the data set went from having over 16000 entries to only about 1900 entries. This also creates a new bias because of 4000 games that are included in the Rawg.io data set, they are the 4000 most popular games based on their meta critic score. This is important because it takes away representation from less popular games.   
+
+# Exploratory Data Analysis Continued
+
+```{r}
+ggplot(data = finalData, aes(x = playtime, y = Global_Sales)) + geom_point(alpha = 0.2) + geom_smooth(se=FALSE) +
+  labs(x = "Average Playtime (hours)", y = "Global Sales (million copies sold)")
+```
+  
+To continue with the data analysis, I have created a graph that compares the average `playtime` to the `Global_Sales` of each game. As you can see, while its not a linear correlation there does seem to be a "sweet-spot" where at about 25 to 30 hours of game play sales spike. Also, after about 50 hours there seems to be a sharp increase, however the number of games past 50 hours also start to decrease so this could be the case of outliers causing there to look like their is positive correlation. Given that their does seem to be some patterns and trends with `playtime` versus `Global_Sales`, I have chosen to move forward with my plan and integrate `playtime` into my final prediction model. 
+  
+# Models Continued
+  
+For all four models that were made for this deliverable, the validation methodology has been fixed in order to address a fault in deliverable 2 and to meet best practice standards. Now the data set has been split 60/20/20 with 60% of the data being used to train the model, 20% to validate the model, and the last 20% to test the model at the very end. This is opposed to the previous deliverable where I simply had an 80/20 split with 80% to train the model and 20% to test the model. This new split is better because it helps to reduce bias and helps avoid the issue of over tuning towards the test set. 
+  
+## full data set and playtime added
+```{r}
+rest_rows <- as.vector(createDataPartition(finalData$Global_Sales, p = 0.8, list = FALSE))
+test <- finalData[-rest_rows, ]
+rest <- finalData[rest_rows, ]
+
+train_rows <- as.vector(createDataPartition(rest$Global_Sales, p = 0.75, list = FALSE))
+
+train <- rest[train_rows, ]
+validate <- rest[-train_rows, ]
+VGmodel <- lm(Global_Sales ~ Critic_Score + User_Score + playtime, data = train)
+
+predictions <- add_predictions(validate, VGmodel)
+
+ggplot(data = predictions, mapping = aes(x = Global_Sales, y = pred)) + 
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red")
+
+resids <- add_residuals(validate, VGmodel)
+
+
+ggplot(data = resids, mapping = aes(x = Critic_Score, y = resid)) + 
+  geom_ref_line(h = 0) +
+  geom_point()
+
+clean <- predictions %>%
+  filter(!is.na(pred))
+
+summary(VGmodel)
+R2(clean$pred, clean$Global_Sales)
+MAE(clean$pred, clean$Global_Sales)
+RMSE(clean$pred, clean$Global_Sales)
+
+predictions <- add_predictions(test, VGmodel)
+
+ggplot(data = predictions, mapping = aes(x = Global_Sales, y = pred)) + 
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red")
+
+clean <- predictions %>%
+  filter(!is.na(pred))
+
+R2(clean$pred, clean$Global_Sales)
+MAE(clean$pred, clean$Global_Sales)
+RMSE(clean$pred, clean$Global_Sales)
+
+resids <- add_residuals(test, VGmodel)
+
+ggplot(data = resids, mapping = aes(x = Critic_Score, y = resid)) + 
+  geom_ref_line(h = 0) +
+  geom_point()
+```
+  
+Based on the summary of this model, the results are less accurate then the models in deliverable two based on the MAE value. However the `playtime` value has a t-value of close to zero which means that it is helping predict the `Global_Sales` of each game. I have two predictions for why the results are less accurate compared to the models found in deliverable 2. The first has to do with the new inclusion of proper validation, naturally now that the model is not being over tuned for a non changing test set final predictions will be less accurate. The other is that the decrease in data points could lead to a less accurate model. I will explore both of these points more in the final model. Also, it should be mentioned that the residuals graph matches the models form deliverable 2 where it has a trend of under valuing games with a higher `Critic_Score`. 
+  
+## Low Sales With Playtime Added
+```{r}
+lowSales <-  finalData %>%
+  filter(Global_Sales <= 5) %>%
+  filter(Global_Sales >= 0.2) 
+
+
+rest_rows <- as.vector(createDataPartition(lowSales$Global_Sales, p = 0.8, list = FALSE))
+test <- lowSales[-rest_rows, ]
+rest <- lowSales[rest_rows, ]
+
+train_rows <- as.vector(createDataPartition(rest$Global_Sales, p = 0.75, list = FALSE))
+
+train <- rest[train_rows, ]
+validate <- rest[-train_rows, ]
+VGmodel <- lm(Global_Sales ~ Critic_Score + User_Score + playtime, data = train)
+
+predictions <- add_predictions(validate, VGmodel)
+
+ggplot(data = predictions, mapping = aes(x = Global_Sales, y = pred)) + 
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red")
+
+resids <- add_residuals(validate, VGmodel)
+
+ggplot(data = resids, mapping = aes(x = Critic_Score, y = resid)) + 
+  geom_ref_line(h = 0) +
+  geom_point()
+
+clean <- predictions %>%
+  filter(!is.na(pred))
+
+summary(VGmodel)
+R2(clean$pred, clean$Global_Sales)
+MAE(clean$pred, clean$Global_Sales)
+RMSE(clean$pred, clean$Global_Sales)
+
+predictions <- add_predictions(test, VGmodel)
+
+ggplot(data = predictions, mapping = aes(x = Global_Sales, y = pred)) + 
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red")
+
+clean <- predictions %>%
+  filter(!is.na(pred))
+
+R2(clean$pred, clean$Global_Sales)
+MAE(clean$pred, clean$Global_Sales)
+RMSE(clean$pred, clean$Global_Sales)
+
+resids <- add_residuals(test, VGmodel)
+
+ggplot(data = resids, mapping = aes(x = Critic_Score, y = resid)) + 
+  geom_ref_line(h = 0) +
+  geom_point()
+```
+  
+The first conclusion to make is that the split of higher and lower selling games did increase the accuracy of the model. This is because the R^2 value is now .17 compared to the 0.10 that it was in the first model. Also, the mean average error went from 1.29 to 0.69. In addition, this model seems to have solved the issue that it was trying to address, which was that the original models were under valuing games that had a high critic score. Based on the residuals plot, there is now a randomness to it. This is important because it suggests that there are no longer any common trends that are dictating any inaccuracies in the model. 
+  
+## High Sales With Playtime Added
+```{r}
+highSales <-  finalData %>%
+  filter(Global_Sales > 5)
+  
+rest_rows <- as.vector(createDataPartition(highSales$Global_Sales, p = 0.8, list = FALSE))
+test <- highSales[-rest_rows, ]
+rest <- highSales[rest_rows, ]
+
+train_rows <- as.vector(createDataPartition(rest$Global_Sales, p = 0.75, list = FALSE))
+
+train <- rest[train_rows, ]
+validate <- rest[-train_rows, ]
+VGmodel <- lm(Global_Sales ~ Critic_Score + User_Score + playtime, data = train)
+
+predictions <- add_predictions(validate, VGmodel)
+
+ggplot(data = predictions, mapping = aes(x = Global_Sales, y = pred)) + 
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red")
+
+resids <- add_residuals(validate, VGmodel)
+
+
+ggplot(data = resids, mapping = aes(x = Critic_Score, y = resid)) + 
+  geom_ref_line(h = 0) +
+  geom_point()
+
+clean <- predictions %>%
+  filter(!is.na(pred))
+
+summary(VGmodel)
+R2(clean$pred, clean$Global_Sales)
+MAE(clean$pred, clean$Global_Sales)
+RMSE(clean$pred, clean$Global_Sales)
+
+predictions2 <- add_predictions(test, VGmodel)
+
+ggplot(data = predictions2, mapping = aes(x = Global_Sales, y = pred)) + 
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red")
+
+clean <- predictions2 %>%
+  filter(!is.na(pred))
+
+R2(clean$pred, clean$Global_Sales)
+MAE(clean$pred, clean$Global_Sales)
+RMSE(clean$pred, clean$Global_Sales)
+
+resids2 <- add_residuals(test, VGmodel)
+
+ggplot(data = resids2, mapping = aes(x = Critic_Score, y = resid)) + 
+  geom_ref_line(h = 0) +
+  geom_point()
+```
+
+The main issue with this model derives from the lack of data points. This makes any predictions that it would make not mean much. Perhaps in the future, the data set could be split 50/50 and that could have the potential of fixing the issue. This is because it solve the problem where the top half has to few data points.   
+
+## full data set and no playtime added
+```{r}
+rest_rows <- as.vector(createDataPartition(VGSales$Global_Sales, p = 0.8, list = FALSE))
+test <- VGSales[-rest_rows, ]
+rest <- VGSales[rest_rows, ]
+
+train_rows <- as.vector(createDataPartition(rest$Global_Sales, p = 0.75, list = FALSE))
+
+train <- rest[train_rows, ]
+validate <- rest[-train_rows, ]
+VGmodel <- lm(Global_Sales ~ Critic_Score + User_Score, data = train)
+
+predictions <- add_predictions(validate, VGmodel)
+
+ggplot(data = predictions, mapping = aes(x = Global_Sales, y = pred)) + 
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red")
+
+resids <- add_residuals(validate, VGmodel)
+
+
+ggplot(data = resids, mapping = aes(x = Critic_Score, y = resid)) + 
+  geom_ref_line(h = 0) +
+  geom_point()
+
+clean <- predictions %>%
+  filter(!is.na(pred))
+
+summary(VGmodel)
+R2(clean$pred, clean$Global_Sales)
+MAE(clean$pred, clean$Global_Sales)
+RMSE(clean$pred, clean$Global_Sales)
+
+predictions <- add_predictions(test, VGmodel)
+predictions
+
+ggplot(data = predictions, mapping = aes(x = Global_Sales, y = pred)) + 
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red")
+
+clean <- predictions %>%
+  filter(!is.na(pred))
+
+R2(clean$pred, clean$Global_Sales)
+MAE(clean$pred, clean$Global_Sales)
+RMSE(clean$pred, clean$Global_Sales)
+
+resids <- add_residuals(test, VGmodel)
+
+ggplot(data = resids, mapping = aes(x = Critic_Score, y = resid)) + 
+  geom_ref_line(h = 0) +
+  geom_point()
+```
+  
+With this last model, I wanted to test my hypothesis from the first model where the reasons for the decreases in accuracy from deliverable 2 were because of the new form of validation rather than the introduction of `playtime`. As you can see, now that the model has proper validation it accuracy actually improves given that the new mean average error is about 0.71 and the mean average value in the model within deliverable 2 was 0.74. Also the tendency for the model to under value games has continued with the inclusion of proper validation, given the trends in the residuals plot. This helps lead to the conclusion that separating the data set by high and low sales was a positive improvement.
+  
+# Models Conclusion
+  
+In the end, the overall best model in predicting `Global_Sales` in my analysis ended up being the model with the Low Sales With Playtime Added, with an mean average error of 0.69. My original goal was to design a model that could predict within an error of 1. Which this model is able to do with flying colors.   
+It should be noted that the best model in terms of mean average error was my model that predicted `NA_Sales` located in deliverable 2 with a mean average error of 0.56. However, for the goals of the data set analysis I feel that being able to predict `Global_Sales` is more important given that video games are a global industry with more than one market. 
+Some possible improvements could be made with the inclusion of more variables particularly from the second data set. the model excised goal and I would value this model development as an overall success in term of the data science goals laid out at the start of this project. 
+
+# Ethics Conclusion   
+
+To conclude the ethics discussion for this project, I am going to stick with the theme of this deliverable and integrate `playtime` to the discussion. Having standardized run times in other mediums like film it quite common, with most movies ranging from 1.5 to 3 hours in run time. However video games have never really had a standard length. Normally one of the main talking points of a game review is how long does it take to play all of the content. But there are so many factors that effect how long a game takes to finish, like the skill of the player, that its hard to have a standard.   
+
+One ethical dilemma that could occur if this model were ever to become a WMD is that it could impact creativity and promote the homogenization of the video game medium. If the publisher of a game saw that games that can advertise that they take about 25 hours to complete sell by far the best. Then this could lead to worse games overall if this became the hard rule. For example, if a game is finished but the average playtime is only 20 hours and the publishers want the game to match that 25 hour "sweet-spot." Then that could lead to more filler content being added into games. Which in my opinion would overall lead to a lower quality of games as a whole. 

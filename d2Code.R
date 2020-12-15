@@ -209,7 +209,7 @@ url <-"https://api.rawg.io/api/games?key=5e133e1135f541f395101593d7cad2b8&dates=
 
 
 
-baseurl <- "https://api.rawg.io/api/games?key=5e133e1135f541f395101593d7cad2b8&page_size=40&dates=1980-01-01,2017-01-01&ordering=metacritic"
+baseurl <- "https://api.rawg.io/api/games?key=8fdd449e387c4197ad765b1222eafa73&page_size=40&dates=1980-01-01,2017-01-01&ordering=metacritic"
 pages <- list()
 for(i in 1:10){
   mydata <- fromJSON(paste0(baseurl, "&page=", i))
